@@ -2,13 +2,14 @@
 import { GoogleGenAI } from "@google/genai";
 import { AiTask, AiTaskType } from "../types";
 
-const API_KEY = process.env.API_KEY;
+const API_KEY = process.env.GEMINI_API_KEY;
 
 if (!API_KEY) {
-    throw new Error("API_KEY environment variable not set");
+    // In development/browser, this might be undefined if not provided via Vite define
+    console.warn("GEMINI_API_KEY not set. AI features will not work.");
 }
 
-const ai = new GoogleGenAI({ apiKey: API_KEY });
+const genAI = API_KEY ? new GoogleGenAI(API_KEY) : null;
 
 const getSystemInstruction = (task: AiTaskType): string => {
     switch (task) {
@@ -62,20 +63,21 @@ const cleanCodeResponse = (text: string): string => {
 };
 
 export const runAiTask = async (task: AiTaskType, prompt: string, code: string): Promise<string> => {
+    if (!genAI) {
+        throw new Error("Gemini API Key is missing. Please add GEMINI_API_KEY to your .env file.");
+    }
+
     const fullPrompt = getPrompt(task, prompt, code);
     const systemInstruction = getSystemInstruction(task);
     
     try {
-        const response = await ai.models.generateContent({
-            model: "gemini-3-flash-preview",
-            contents: fullPrompt,
-            config: {
-                systemInstruction: systemInstruction,
-                temperature: 0.5,
-            },
+        const model = genAI.getGenerativeModel({
+            model: "gemini-1.5-flash",
+            systemInstruction: systemInstruction,
         });
         
-        const responseText = response.text;
+        const result = await model.generateContent(fullPrompt);
+        const responseText = result.response.text();
 
         if (task === AiTask.GenerateCode || task === AiTask.RefactorCode || task === AiTask.GenerateTests) {
             return cleanCodeResponse(responseText);
@@ -89,20 +91,19 @@ export const runAiTask = async (task: AiTaskType, prompt: string, code: string):
 };
 
 export const completeCode = async (codeBefore: string, codeAfter: string, fileName: string): Promise<string> => {
+    if (!genAI) return "";
+
     const systemInstruction = "You are an expert code completion assistant. Given the code before and after the cursor, provide the most likely next few lines of code to complete the current thought. Only output the raw code to be inserted at the cursor. Do not include any markdown formatting, explanations, or comments unless they are part of the code.";
     const prompt = `File: ${fileName}\n\nCode before cursor:\n\`\`\`\n${codeBefore}\n\`\`\`\n\nCode after cursor:\n\`\`\`\n${codeAfter}\n\`\`\``;
 
     try {
-        const response = await ai.models.generateContent({
-            model: "gemini-3-flash-preview",
-            contents: prompt,
-            config: {
-                systemInstruction: systemInstruction,
-                temperature: 0.2,
-            },
+        const model = genAI.getGenerativeModel({
+            model: "gemini-1.5-flash",
+            systemInstruction: systemInstruction,
         });
         
-        return cleanCodeResponse(response.text);
+        const result = await model.generateContent(prompt);
+        return cleanCodeResponse(result.response.text());
     } catch (error) {
         console.error("Gemini AI completion failed:", error);
         return "";
